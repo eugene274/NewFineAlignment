@@ -26,10 +26,12 @@
 #include <TMatrixDEigen.h>
 #include <Math/IFunction.h>
 #include <Math/GSLMinimizer.h>
+#include <TDecompSVD.h>
+#include <TPaveText.h>
 #include <TH2D.h>
 
 constexpr int N_PAR_DIMENSION = 6;
-constexpr int N_SLICE_ENTRIES = 5000;
+constexpr int N_SLICE_ENTRIES = 1000;
 constexpr int N_SLICES_PRINT = 10;
 
 struct TpcCalibData {
@@ -124,6 +126,64 @@ class SliceDiscrepancyFCT : public ROOT::Math::IGradientFunctionMultiDim {
   std::shared_ptr<SliceData> sliceDataPtr;
 };
 
+struct SliceAnalysisStat {
+  int sliceID{-1};
+
+  uint sliceEventStart{0};
+  uint sliceEventEnd{0};
+  uint sliceDT{0};
+
+  bool isMinimizationSuccessful{false};
+  TMatrixD Aopt{TMatrixD(2, 2)};
+  TVectorD u0opt{TVectorD(2)};
+
+  bool isSVDSuccesful{false};
+  TMatrixD u{TMatrixD(2, 2)}, v{TMatrixD(2, 2)};
+  TVectorD signal{TVectorD(2)};
+  double svdPhiU{-999}, svdPhiV{-999};
+
+};
+
+TPaveText *GenerateSliceInfo(const SliceAnalysisStat &analysisStat) {
+
+  auto matrix = [](const TMatrixD &m) {
+    return Form("#left( #splitline{%5.3f  %5.3f}{%5.3f  %5.3f}  #right)",
+                m[0][0], m[0][1],
+                m[1][0], m[1][1]);
+  };
+
+  auto vector = [](const TVectorD &m) {
+    return Form("(%5.3f; %5.3f)", m[0], m[1]);
+  };
+
+  auto pave = new TPaveText(0.1, 0.1, 0.9, 0.9);
+  pave->SetTextSize(0.02);
+  pave->SetTextAlign(kHAlignLeft + kVAlignTop);
+  pave->SetMargin(0.1);
+  pave->AddText(0.1,
+                0.8,
+                Form("Slice %d: Events %u - %u",
+                     analysisStat.sliceID,
+                     analysisStat.sliceEventStart,
+                     analysisStat.sliceEventEnd))->SetTextSize(0.04);
+  pave->AddText(0.1, 0.75, Form("#Delta T = %u s", analysisStat.sliceDT));
+  pave->AddLine(0.1, 0.7, 0.9, 0.7);
+  if (analysisStat.isMinimizationSuccessful) {
+    pave->AddText(0.1, 0.68, "Minimization successful");
+    pave->AddText(0.1, 0.65, Form("u_{0} = %s cm; A = %s", vector(analysisStat.u0opt), matrix(analysisStat.Aopt)));
+    pave->AddLine(0.1, 0.58, 0.9, 0.58);
+  }
+
+  if (analysisStat.isSVDSuccesful) {
+    pave->AddText(0.1, 0.53, "SVD decomposition successful");
+    pave->AddText(0.1, 0.50, Form("A = U #times S #times V^{*} = %s #times %s #times %s",
+        matrix(analysisStat.u), "S", matrix(analysisStat.v)));
+    pave->AddText(0.1, 0.42, Form("d#phi = #phi_{U} - #phi_{V} = %5.5f - %5.5f = %5.5f (rad)",
+        analysisStat.svdPhiU, analysisStat.svdPhiV, analysisStat.svdPhiU - analysisStat.svdPhiV));
+  }
+  return pave;
+}
+
 void ReadBranchesFromTree(TTree &tree) {
   tree.SetBranchAddress("slave_Y", &gTpcCalibData.slave_Y);
   tree.SetBranchAddress("slave_X", &gTpcCalibData.slave_X);
@@ -211,6 +271,12 @@ int main(int argc, char **argv) {
     tree->GetEntry(ie);
 
     if (sliceDataIter == end(*sliceData)) {
+      SliceAnalysisStat analysisStat;
+      analysisStat.sliceID = iSlice;
+      analysisStat.sliceEventStart = sliceData->front().eventNumber;
+      analysisStat.sliceEventEnd = sliceData->back().eventNumber;
+      analysisStat.sliceDT = sliceData->back().eventUnixTime - sliceData->back().eventUnixTime;
+
       Info("loop", "Slice %d", iSlice);
 
       SliceDiscrepancyFCT fct(sliceData);
@@ -228,7 +294,8 @@ int main(int argc, char **argv) {
       min.SetVariable(4, "U0X", 0, 0.001);
       min.SetVariable(5, "U0Y", 0, 0.001);
 
-      if (min.Minimize()) {
+      if (true == (analysisStat.isMinimizationSuccessful = min.Minimize())) {
+        Info("min", "Minimization successful");
         min.PrintResult();
         int ncalls = min.NCalls();
         int niter = min.NIterations();
@@ -239,6 +306,25 @@ int main(int argc, char **argv) {
         TMatrixD Aopt(2, 2, &minX[0]); //  A.Print();
         TVectorD u0opt(2, &minX[4]);  //  u0.Print();
 
+        analysisStat.Aopt = Aopt;
+        analysisStat.u0opt = u0opt;
+
+        TDecompSVD svd(Aopt);
+        if (true == (analysisStat.isSVDSuccesful = svd.Decompose())) {
+          Info("decomp", "Decomposition successful");
+          auto u = svd.GetU();
+          auto v = svd.GetV();
+          auto sig = svd.GetSig();
+          double phi_u = ASin(u[0][1]);
+          double phi_v = ASin(v[0][1]);
+          Info("decomp", "dPhi = %f", phi_u - phi_v);
+
+          analysisStat.u = u;
+          analysisStat.v = v;
+          analysisStat.signal = sig;
+          analysisStat.svdPhiU = phi_u;
+          analysisStat.svdPhiV = phi_v;
+        }
 
         TH2D hdYvsY_before_slice("hdYvsY_before_slice", ";Y (cm);dY (cm)", 200, -100, 100, 1000, -1., 1.);
         TH2D hdYvsY_after_slice("hdYvsY_after_slice", ";Y (cm);dY (cm)", 200, -100, 100, 1000, -1., 1.);
@@ -263,11 +349,9 @@ int main(int argc, char **argv) {
 
         if (iSlice % sliceStep == 0) {
           c->Clear();
-          sliceLabel->DrawText(0.1, 0.8,
-                               Form("Slice %d: Events %d - %d",
-                                    iSlice,
-                                    sliceData->front().eventNumber,
-                                    sliceData->back().eventNumber));
+
+          auto slideContent = unique_ptr<TPaveText>(GenerateSliceInfo(analysisStat));
+          slideContent->Draw();
           c->Print("test.pdf", "pdf");
           c->Clear();
 
