@@ -25,8 +25,6 @@
 #include <TH2D.h>
 #include <TChain.h>
 
-
-constexpr int N_PAR_DIMENSION = 6;
 constexpr int N_SLICE_ENTRIES = 5000;
 constexpr int N_SLICES_PRINT = 10;
 
@@ -39,42 +37,56 @@ class SliceDiscrepancyFCT : public ROOT::Math::IGradientFunctionMultiDim {
   explicit SliceDiscrepancyFCT(std::shared_ptr<SliceData> _sliceDataPtr) : sliceDataPtr(std::move(_sliceDataPtr)) {}
 
   unsigned int NDim() const override {
-    return N_PAR_DIMENSION;
+    return 3;
   }
 
   void FdF(const double *x, double &f, double *df) const override {
     using namespace std;
-    TMatrixD A(2, 2, &x[0]);
-    TVectorD u0(2, &x[4]);
+    using namespace TMath;
 
-    TVectorD meanGrad(N_PAR_DIMENSION);
-    double dd = 0;
-    for_each(sliceDataPtr->begin(), sliceDataPtr->end(), [A, u0, &dd, &meanGrad](const TpcCalibData &data) {
-      if ((data.u() - data.uPrim()).Norm1() > 1.)
-        return;
 
-      auto delta = (A * data.u() + u0) - data.uPrim();
-      dd += delta.Norm2Sqr();
+    double dPhi = x[0];
+    TVectorD U0(2, &x[1]);
 
-      TVectorD grad(N_PAR_DIMENSION);
-      grad[0] = delta[0] * data.u()[0];
-      grad[1] = delta[0] * data.u()[1];
-      grad[2] = delta[1] * data.u()[0];
-      grad[3] = delta[1] * data.u()[1];
-      grad[4] = delta[0];
-      grad[5] = delta[1];
-      grad *= 2.;
+    TMatrixD A(2, 2);
+    TMatrixD DA(2, 2);
+    {
+      double si = Sin(dPhi);
+      double co = Cos(dPhi);
 
-      meanGrad += grad;
+      double a_arr[] = {
+          co, si,
+          -si, co};
+      double da_arr[] = {
+          -si, co,
+          -co, -si};
+      A.SetMatrixArray(a_arr);
+      DA.SetMatrixArray(da_arr);
+    }
 
-    });
+    double _f = 0;
+    TVectorD _df(NDim());
 
-    dd /= N_SLICE_ENTRIES;
-    meanGrad *= 1. / N_SLICE_ENTRIES;
+    for (auto data : *sliceDataPtr) {
+      auto u = data.u();
+      auto up = data.uPrim();
 
-    f = dd;
-    double *dfArr = meanGrad.GetMatrixArray();
-    copy(&dfArr[0], &dfArr[N_PAR_DIMENSION], &df[0]);
+      if ((u - up).Norm1() > 1.)
+        continue;
+
+      auto d = (A * u + U0) - up;
+      _f += 1. / N_SLICE_ENTRIES * d.Norm2Sqr();
+
+      _df[0] += 2. / N_SLICE_ENTRIES * (d * (DA * u));
+      _df[1] += 2. / N_SLICE_ENTRIES * d[0];
+      _df[2] += 2. / N_SLICE_ENTRIES * d[1];
+    }
+
+    double *dfArr = _df.GetMatrixArray();
+    copy(&dfArr[0], &dfArr[NDim()], &df[0]);
+
+    f = _f;
+
   }
 
   IBaseFunctionMultiDimTempl<double> *Clone() const override {
@@ -84,14 +96,14 @@ class SliceDiscrepancyFCT : public ROOT::Math::IGradientFunctionMultiDim {
  private:
   double DoEval(const double *x) const override {
     double f;
-    double fdf[6];
+    double fdf[NDim()];
     FdF(x, f, fdf);
     return f;
   }
 
   double DoDerivative(const double *x, unsigned int icoord) const override {
     double f;
-    double fdf[6];
+    double fdf[NDim()];
     FdF(x, f, fdf);
     return fdf[icoord];
   }
@@ -99,8 +111,6 @@ class SliceDiscrepancyFCT : public ROOT::Math::IGradientFunctionMultiDim {
  private:
   std::shared_ptr<SliceData> sliceDataPtr;
 };
-
-
 
 TPaveText *GenerateSliceInfo(const SliceAnalysisData &stat) {
 
@@ -118,40 +128,40 @@ TPaveText *GenerateSliceInfo(const SliceAnalysisData &stat) {
   pave->SetTextSize(0.02);
   pave->SetTextAlign(kHAlignLeft + kVAlignTop);
   pave->SetMargin(0.1);
-  pave->AddText(0.1,
-                0.8,
+
+  const double gNewLineLarge = -0.05;
+  const double gNewLineSmall = -0.03;
+  double YY = 0.8;
+
+  pave->AddText(0.1, YY,
                 Form("Slice %d: Events %u - %u",
                      stat.sliceID,
                      stat.sliceEventStart,
                      stat.sliceEventEnd))->SetTextSize(0.04);
-  pave->AddText(0.1, 0.75, Form("#Delta T = %u s", stat.sliceUnixTimeEnd - stat.sliceUnixTimeStart));
-  pave->AddLine(0.1, 0.7, 0.9, 0.7);
+  YY += gNewLineLarge;
+  pave->AddText(0.1, YY, Form("#Delta T = %u s", stat.sliceUnixTimeEnd - stat.sliceUnixTimeStart));
+  YY += gNewLineLarge;
+  pave->AddLine(0.1, YY, 0.9, YY);
+  YY += gNewLineSmall;
   if (stat.minimizationIsSuccessful) {
-    pave->AddText(0.1, 0.68, "Minimization successful");
-    pave->AddText(0.1, 0.65, Form("u_{0} = %s cm; A = %s", vector(stat.optimalU0), matrix(stat.optimalA)));
-    pave->AddLine(0.1, 0.58, 0.9, 0.58);
-  }
+    pave->AddText(0.1, YY, "Minimization successful");
+    YY += gNewLineSmall;
+    pave->AddText(0.1, YY, Form("u_{0} = %s cm; #Delta #phi = %5.7f (rad) = %5.7f (deg)",
+                                vector(stat.optimalU0),
+                                stat.optimalDPhi,
+                                stat.optimalDPhi * TMath::RadToDeg()
+    ));
+    YY += gNewLineSmall;
+    pave->AddLine(0.1, YY, 0.9, YY);
 
-  TMatrixD v = stat.svdV;
-  v.T();
-
-  if (stat.svdIsSuccessful) {
-    pave->AddText(0.1, 0.53, "SVD decomposition successful");
-    pave->AddText(0.1, 0.50, Form("A = U #times S #times #bar{V} = %s #times %s #times %s",
-                                  matrix(stat.svdU), "S", matrix(v)));
-    pave->AddText(0.1, 0.42, Form("d#phi = #phi_{U} - #phi_{V} = %5.5f - %5.5f = %5.5f (rad) = %5.5f (deg)",
-                                  stat.svdPhiU,
-                                  stat.svdPhiV,
-                                  stat.svdPhiU - stat.svdPhiV,
-                                  TMath::RadToDeg() * (stat.svdPhiU - stat.svdPhiV)));
-
-    pave->AddLine(0.1, 0.37, 0.9, 0.37);
-    pave->AddText(0.1, 0.32, Form("Slave TPC center: %s #rightarrow %s; #Delta = %s",
-                                  vector(stat.slaveChamberOldCenter),
-                                  vector(stat.slaveChamberNewCenter),
-                                  vector(stat.slaveChamberNewCenter - stat.slaveChamberOldCenter)
+    YY += gNewLineLarge;
+    pave->AddText(0.1, YY, Form("Slave TPC center: %s #rightarrow %s; #Delta = %s",
+                                vector(stat.slaveChamberOldCenter),
+                                vector(stat.slaveChamberNewCenter),
+                                vector(stat.slaveChamberNewCenter - stat.slaveChamberOldCenter)
     ));
   }
+
   return pave;
 }
 
@@ -244,7 +254,6 @@ int main(int argc, char **argv) {
   sliceLabel->SetNDC();
   writePDF(1);
 
-
   auto outputRootFilePtr = make_unique<TFile>(Form("alignment_%s.root", tree_name.c_str()), "recreate");
   auto analysisResultTreePtr = new TTree(tree_name.c_str(), "");
   SliceAnalysisData analysisStat;
@@ -293,15 +302,11 @@ int main(int argc, char **argv) {
       ROOT::Math::GSLMinimizer min(ROOT::Math::kVectorBFGS);
       min.SetMaxFunctionCalls(10000);
       min.SetMaxIterations(10000);
-//      min.SetTolerance(0.005 * N_SLICE_ENTRIES);
       min.SetFunction(fct);
 
-      min.SetVariable(0, "A0", 1, 0.01);
-      min.SetVariable(1, "A1", 0, 0.01);
-      min.SetVariable(2, "A2", 0, 0.01);
-      min.SetVariable(3, "A3", 1, 0.01);
-      min.SetVariable(4, "U0X", hU0X.GetEntries() > 20 ? 0.5 * (hU0X.GetMean() + meanDU[0]) : meanDU[0], 1e-4);
-      min.SetVariable(5, "U0Y", hU0Y.GetEntries() > 20 ? 0.5 * (hU0Y.GetMean() + meanDU[1]) : meanDU[1], 1e-4);
+      min.SetVariable(0, "dPhi", 1, 1e-4);
+      min.SetVariable(1, "U0X", hU0X.GetEntries() > 20 ? 0.5 * (hU0X.GetMean() + meanDU[0]) : meanDU[0], 1e-4);
+      min.SetVariable(2, "U0Y", hU0Y.GetEntries() > 20 ? 0.5 * (hU0Y.GetMean() + meanDU[1]) : meanDU[1], 1e-4);
 
       if (true == (analysisStat.minimizationIsSuccessful = min.Minimize())) {
         Info("min", "Minimization successful");
@@ -309,19 +314,35 @@ int main(int argc, char **argv) {
         int ncalls = min.NCalls();
         int niter = min.NIterations();
 
-        auto minX = TVectorD(N_PAR_DIMENSION, min.X());
+        auto minX = TVectorD(fct.NDim(), min.X());
         double val = fct(minX.GetMatrixArray());
 
-        TMatrixD Aopt(2, 2, &minX[0]); //  A.Print();
-        TVectorD u0opt(2, &minX[4]);  //  u0.Print();
+        double dPhi = minX[0];
+        TVectorD u0opt(2, &minX[1]);  //  u0.Print();
 
-        analysisStat.optimalA = Aopt;
+        Info("min", "dPhi = %f (rad)", dPhi);
+
+        TMatrixD optimalA(2, 2); //  A.Print();
+        {
+          double arr[] = {Cos(dPhi), Sin(dPhi), -Sin(dPhi), Cos(dPhi)};
+          optimalA.SetMatrixArray(arr);
+        }
+
+        analysisStat.optimalA = optimalA;
+        analysisStat.optimalDPhi = dPhi;
         analysisStat.optimalU0 = u0opt;
+
+        analysisStat.slaveChamberOldCenter = sliceData->back().C();
+        analysisStat.slaveChamberNewCenter = optimalA * analysisStat.slaveChamberOldCenter + u0opt;
+        analysisStat.slaveChamberDU = analysisStat.slaveChamberNewCenter - analysisStat.slaveChamberOldCenter;
+        analysisStat.slaveChamberDPhi = RadToDeg() * dPhi;
+
+        analysisResultTreePtr->Fill();
 
         hU0X.Fill(u0opt[0]);
         hU0Y.Fill(u0opt[1]);
-
-        TDecompSVD svd(Aopt);
+        /*
+        TDecompSVD svd(optimalA);
         if (true == (analysisStat.svdIsSuccessful = svd.Decompose())) {
           Info("SVD", "Decomposition successful");
           auto u = svd.GetU();
@@ -329,7 +350,7 @@ int main(int argc, char **argv) {
           auto sig = svd.GetSig();
           double phi_u = ASin(u[0][1]);
           double phi_v = ASin(v[0][1]);
-          Info("SVD", "dPhi = %f", phi_u - phi_v);
+
 
           analysisStat.svdU = u;
           analysisStat.svdV = v;
@@ -337,33 +358,35 @@ int main(int argc, char **argv) {
           analysisStat.svdPhiU = phi_u;
           analysisStat.svdPhiV = phi_v;
 
-          analysisStat.slaveChamberOldCenter = sliceData->back().C();
-          analysisStat.slaveChamberNewCenter = Aopt * analysisStat.slaveChamberOldCenter + u0opt;
-          analysisStat.slaveChamberDU = analysisStat.slaveChamberNewCenter - analysisStat.slaveChamberOldCenter;
-          analysisStat.slaveChamberDPhi = RadToDeg()*(phi_u - phi_v);
 
-          analysisResultTreePtr->Fill();
+
+          optimalA = u * v.T();
         }
+        */
 
-        TH2D hdYvsY_before_slice("hdYvsY_before_slice", ";Y (cm);dY (cm)", 200, -100, 100, 1000, -1., 1.);
-        TH2D hdYvsY_after_slice("hdYvsY_after_slice", ";Y (cm);dY (cm)", 200, -100, 100, 1000, -1., 1.);
-        TH2D hdYvsX_before_slice("hdYvsX_before_slice", ";X (cm);dY (cm)", 600, -300, 300, 1000, -1., 1.);
-        TH2D hdYvsX_after_slice("hdYvsX_after_slice", ";X (cm);dY (cm)", 600, -300, 300, 1000, -1., 1.);
+        TH2D hdYvsY_before_slice
+            ("hdYvsY_before_slice", ";Y_{master} (cm);Y_{slave} - Y_{master} (cm)", 200, -100, 100, 1000, -1., 1.);
+        TH2D hdYvsY_after_slice
+            ("hdYvsY_after_slice", ";Y_{master} (cm);Y_{slave} - Y_{master} (cm)", 200, -100, 100, 1000, -1., 1.);
+        TH2D hdYvsX_before_slice
+            ("hdYvsX_before_slice", ";X_{master} (cm);Y_{slave} - Y_{master} (cm)", 600, -300, 300, 1000, -1., 1.);
+        TH2D hdYvsX_after_slice
+            ("hdYvsX_after_slice", ";X_{master} (cm);Y_{slave} - Y_{master} (cm)", 600, -300, 300, 1000, -1., 1.);
 
         for (auto data : *sliceData) {
           hdYvsY_before_slice.Fill(data.uPrim()[1], (data.u() - data.uPrim())[1]);
           hdYvsY_before.Fill(data.uPrim()[1], (data.u() - data.uPrim())[1]);
-          hdYvsY_after_slice.Fill(data.uPrim()[1], (Aopt * data.u() + u0opt - data.uPrim())[1]);
-          hdYvsY_after.Fill(data.uPrim()[1], (Aopt * data.u() + u0opt - data.uPrim())[1]);
+          hdYvsY_after_slice.Fill(data.uPrim()[1], (optimalA * data.u() + u0opt - data.uPrim())[1]);
+          hdYvsY_after.Fill(data.uPrim()[1], (optimalA * data.u() + u0opt - data.uPrim())[1]);
           hdYvsX_before_slice.Fill(data.uPrim()[0], (data.u() - data.uPrim())[1]);
           hdYvsX_before.Fill(data.uPrim()[0], (data.u() - data.uPrim())[1]);
-          hdYvsX_after_slice.Fill(data.uPrim()[0], (Aopt * data.u() + u0opt - data.uPrim())[1]);
-          hdYvsX_after.Fill(data.uPrim()[0], (Aopt * data.u() + u0opt - data.uPrim())[1]);
+          hdYvsX_after_slice.Fill(data.uPrim()[0], (optimalA * data.u() + u0opt - data.uPrim())[1]);
+          hdYvsX_after.Fill(data.uPrim()[0], (optimalA * data.u() + u0opt - data.uPrim())[1]);
 
           hdXvsY_before.Fill(data.uPrim()[1], (data.u() - data.uPrim())[0]);
-          hdXvsY_after.Fill(data.uPrim()[1], (Aopt * data.u() + u0opt - data.uPrim())[0]);
+          hdXvsY_after.Fill(data.uPrim()[1], (optimalA * data.u() + u0opt - data.uPrim())[0]);
           hdXvsX_before.Fill(data.uPrim()[0], (data.u() - data.uPrim())[0]);
-          hdXvsX_after.Fill(data.uPrim()[0], (Aopt * data.u() + u0opt - data.uPrim())[0]);
+          hdXvsX_after.Fill(data.uPrim()[0], (optimalA * data.u() + u0opt - data.uPrim())[0]);
         }
 
 //        if (true) {

@@ -54,6 +54,7 @@ class SliceAnalysisData {
 
   bool minimizationIsSuccessful{false};
   TMatrixD optimalA{TMatrixD(2, 2)};
+  double optimalDPhi{0};
   TVectorD optimalU0{TVectorD(2)};
 
   bool svdIsSuccessful{false};
