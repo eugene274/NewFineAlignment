@@ -40,7 +40,7 @@ struct TpcCalibData {
 
 };
 
-class SliceAnalysisData : public TObject {
+class SliceAnalysisData {
 
  public:
   int sliceID{-1};
@@ -50,18 +50,21 @@ class SliceAnalysisData : public TObject {
   uint sliceUnixTimeStart{0};
   uint sliceUnixTimeEnd{0};
 
-  bool isMinimizationSuccessful{false};
-  TMatrixD Aopt{TMatrixD(2, 2)};
-  TVectorD u0opt{TVectorD(2)};
+  TVectorD sliceMeanDU{TVectorD{2}};
 
-  bool isSVDSuccessful{false};
+  bool minimizationIsSuccessful{false};
+  TMatrixD optimalA{TMatrixD(2, 2)};
+  TVectorD optimalU0{TVectorD(2)};
+
+  bool svdIsSuccessful{false};
   TMatrixD svdU{TMatrixD(2, 2)}, svdV{TMatrixD(2, 2)};
-  TVectorD signal{TVectorD(2)};
+  TVectorD svdSig{TVectorD(2)};
   double svdPhiU{-999}, svdPhiV{-999};
 
-  TVectorD oldC{TVectorD(2)}, newC{TVectorD(2)};
+  TVectorD slaveChamberOldCenter{TVectorD(2)}, slaveChamberNewCenter{TVectorD(2)};
 
-  ClassDef (SliceAnalysisData,1)
+  double slaveChamberDPhi;
+  TVectorD slaveChamberDU{TVectorD(2)};
 
 };
 
