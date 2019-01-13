@@ -9,5 +9,9 @@ find_package(ROOT REQUIRED)
 
 include(${ROOT_USE_FILE})
 
-add_executable(NewTpcCalibration main.cpp)
+ROOT_GENERATE_DICTIONARY(
+        G__${PROJECT_NAME} types.h LINKDEF ${PROJECT_NAME}LinkDef.h
+)
+
+add_executable(NewTpcCalibration main.cpp G__${PROJECT_NAME}.cxx)
 target_link_libraries(NewTpcCalibration PUBLIC ${ROOT_LIBRARIES} ROOT::MathMore)

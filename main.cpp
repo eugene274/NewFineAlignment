@@ -29,34 +29,15 @@
 #include <TDecompSVD.h>
 #include <TPaveText.h>
 #include <TH2D.h>
+#include <TChain.h>
+
+#include "types.h"
 
 constexpr int N_PAR_DIMENSION = 6;
-constexpr int N_SLICE_ENTRIES = 1000;
+constexpr int N_SLICE_ENTRIES = 5000;
 constexpr int N_SLICES_PRINT = 10;
 
-struct TpcCalibData {
-  uint eventUnixTime;
-  uint eventNumber;
-  uint runNumber;
-
-  double slave_Y;
-  double slave_X;
-  double master_Y;
-  double master_X;
-  double slave_recVDrift;
-
-  TVectorD u() const {
-    double uArr[2] = {slave_X, slave_Y};
-    return TVectorD(2, uArr);
-  }
-
-  TVectorD uPrim() const {
-    double uArr[2] = {master_X, master_Y};
-    return TVectorD(2, uArr);
-  }
-
-} gTpcCalibData;
-
+TpcCalibData gTpcCalibData;
 typedef std::array<TpcCalibData, N_SLICE_ENTRIES> SliceData;
 
 class SliceDiscrepancyFCT : public ROOT::Math::IGradientFunctionMultiDim {
@@ -126,25 +107,9 @@ class SliceDiscrepancyFCT : public ROOT::Math::IGradientFunctionMultiDim {
   std::shared_ptr<SliceData> sliceDataPtr;
 };
 
-struct SliceAnalysisStat {
-  int sliceID{-1};
 
-  uint sliceEventStart{0};
-  uint sliceEventEnd{0};
-  uint sliceDT{0};
 
-  bool isMinimizationSuccessful{false};
-  TMatrixD Aopt{TMatrixD(2, 2)};
-  TVectorD u0opt{TVectorD(2)};
-
-  bool isSVDSuccesful{false};
-  TMatrixD u{TMatrixD(2, 2)}, v{TMatrixD(2, 2)};
-  TVectorD signal{TVectorD(2)};
-  double svdPhiU{-999}, svdPhiV{-999};
-
-};
-
-TPaveText *GenerateSliceInfo(const SliceAnalysisStat &analysisStat) {
+TPaveText *GenerateSliceInfo(const SliceAnalysisData &stat) {
 
   auto matrix = [](const TMatrixD &m) {
     return Form("#left( #splitline{%5.3f  %5.3f}{%5.3f  %5.3f}  #right)",
@@ -163,23 +128,36 @@ TPaveText *GenerateSliceInfo(const SliceAnalysisStat &analysisStat) {
   pave->AddText(0.1,
                 0.8,
                 Form("Slice %d: Events %u - %u",
-                     analysisStat.sliceID,
-                     analysisStat.sliceEventStart,
-                     analysisStat.sliceEventEnd))->SetTextSize(0.04);
-  pave->AddText(0.1, 0.75, Form("#Delta T = %u s", analysisStat.sliceDT));
+                     stat.sliceID,
+                     stat.sliceEventStart,
+                     stat.sliceEventEnd))->SetTextSize(0.04);
+  pave->AddText(0.1, 0.75, Form("#Delta T = %u s", stat.sliceUnixTimeEnd - stat.sliceUnixTimeStart));
   pave->AddLine(0.1, 0.7, 0.9, 0.7);
-  if (analysisStat.isMinimizationSuccessful) {
+  if (stat.isMinimizationSuccessful) {
     pave->AddText(0.1, 0.68, "Minimization successful");
-    pave->AddText(0.1, 0.65, Form("u_{0} = %s cm; A = %s", vector(analysisStat.u0opt), matrix(analysisStat.Aopt)));
+    pave->AddText(0.1, 0.65, Form("u_{0} = %s cm; A = %s", vector(stat.u0opt), matrix(stat.Aopt)));
     pave->AddLine(0.1, 0.58, 0.9, 0.58);
   }
 
-  if (analysisStat.isSVDSuccesful) {
+  TMatrixD v = stat.svdV;
+  v.T();
+
+  if (stat.isSVDSuccessful) {
     pave->AddText(0.1, 0.53, "SVD decomposition successful");
-    pave->AddText(0.1, 0.50, Form("A = U #times S #times V^{*} = %s #times %s #times %s",
-        matrix(analysisStat.u), "S", matrix(analysisStat.v)));
-    pave->AddText(0.1, 0.42, Form("d#phi = #phi_{U} - #phi_{V} = %5.5f - %5.5f = %5.5f (rad)",
-        analysisStat.svdPhiU, analysisStat.svdPhiV, analysisStat.svdPhiU - analysisStat.svdPhiV));
+    pave->AddText(0.1, 0.50, Form("A = U #times S #times #bar{V} = %s #times %s #times %s",
+                                  matrix(stat.svdU), "S", matrix(v)));
+    pave->AddText(0.1, 0.42, Form("d#phi = #phi_{U} - #phi_{V} = %5.5f - %5.5f = %5.5f (rad) = %5.5f (deg)",
+                                  stat.svdPhiU,
+                                  stat.svdPhiV,
+                                  stat.svdPhiU - stat.svdPhiV,
+                                  TMath::RadToDeg() * (stat.svdPhiU - stat.svdPhiV)));
+
+    pave->AddLine(0.1, 0.37, 0.9, 0.37);
+    pave->AddText(0.1, 0.32, Form("Slave TPC center: %s #rightarrow %s; #Delta = %s",
+                                  vector(stat.oldC),
+                                  vector(stat.newC),
+                                  vector(stat.newC - stat.oldC)
+    ));
   }
   return pave;
 }
@@ -190,6 +168,9 @@ void ReadBranchesFromTree(TTree &tree) {
   tree.SetBranchAddress("master_Y", &gTpcCalibData.master_Y);
   tree.SetBranchAddress("master_X", &gTpcCalibData.master_X);
   tree.SetBranchAddress("slave_recVDrift", &gTpcCalibData.slave_recVDrift);
+
+  tree.SetBranchAddress("slave_recChamberXCenter", &gTpcCalibData.slave_recChamberXCenter);
+  tree.SetBranchAddress("slave_recChamberYCenter", &gTpcCalibData.slave_recChamberYCenter);
 
   tree.SetBranchAddress("eventUnixTime", &gTpcCalibData.eventUnixTime);
   tree.SetBranchAddress("eventNumber", &gTpcCalibData.eventNumber);
@@ -217,38 +198,42 @@ int main(int argc, char **argv) {
     }
   }
 
-  auto ifile = unique_ptr<TFile>(TFile::Open(input_file.c_str(), "read"));
-
-  if (!ifile) {
-    return 1;
-  }
-
   Info(MODULE_NAME, "Input file: %s", input_file.c_str());
 
-  auto tree = unique_ptr<TTree>((TTree *) ifile->Get(tree_name.c_str()));
+  auto chainPtr = make_unique<TChain>(tree_name.c_str());
+  chainPtr->Add(input_file.c_str());
+  chainPtr->ls();
+
+  Info(MODULE_NAME, "Loading chain: %s", tree_name.c_str());
+
+  ReadBranchesFromTree(*chainPtr);
+  long ne = chainPtr->GetEntries();
 
   /*
-   * Initialize tree
-   */
-  if (!tree) {
-    return 1;
-  }
-
-  Info(MODULE_NAME, "Loading tree: %s", tree_name.c_str());
-
-  ReadBranchesFromTree(*tree);
-  long ne = tree->GetEntries();
-
-  /*
-   * Initialize output
+   * Initialize output PDF
    */
   auto c = std::make_unique<TCanvas>("c1", "");
   gStyle->SetOptStat(111111);
+  auto writePDF = [tree_name, &c](int option = 0) {
+    const char *name = Form("alignment_%s.pdf", tree_name.c_str());
+    if (option == 1) {
+      name = Form("%s(", name);
+    } else if (option == 2) {
+      name = Form("%s)", name);
+    }
+
+    c->Print(name, "pdf");
+  };
 
   auto sliceLabel = make_unique<TText>();
   sliceLabel->SetNDC();
+  writePDF(1);
 
-  c->Print("test.pdf(", "pdf");
+
+  auto outputRootFilePtr = make_unique<TFile>(Form("alignment_%s.root", tree_name.c_str()), "recreate");
+  auto analysisResultTreePtr = new TTree("analysisResultTree", "");
+  SliceAnalysisData analysisStat;
+  analysisResultTreePtr->Branch(tree_name.c_str(), &analysisStat);
 
   TH2D hdYvsY_before("hdYvsY_before", ";Y (cm);dY (cm)", 200, -100, 100, 1000, -1., 1.);
   TH2D hdYvsY_after("hdYvsY_after", ";Y (cm);dY (cm)", 200, -100, 100, 1000, -1., 1.);
@@ -260,6 +245,9 @@ int main(int argc, char **argv) {
   TH2D hdXvsX_before("hdXvsX_before", ";X (cm);dX (cm)", 600, -300, 300, 1000, -1., 1.);
   TH2D hdXvsX_after("hdXvsX_after", ";X (cm);dX (cm)", 600, -300, 300, 1000, -1., 1.);
 
+  TH1D hU0X("hU0X", ";X_{0} (cm)", 2000, -1., 1.);
+  TH1D hU0Y("hU0Y", ";Y_{0} (cm)", 2000, -1., 1.);
+
   auto sliceData = make_shared<SliceData>();
   auto sliceDataIter = sliceData->begin();
 
@@ -267,17 +255,22 @@ int main(int argc, char **argv) {
   long sliceStep = nSlices / N_SLICES_PRINT;
 
   int iSlice = 0;
-  for (long ie = 0; ie < ne; ++ie) {
-    tree->GetEntry(ie);
+  for (long ie = 0; ie < 20000; ++ie) {
+    chainPtr->GetEntry(ie);
 
     if (sliceDataIter == end(*sliceData)) {
-      SliceAnalysisStat analysisStat;
       analysisStat.sliceID = iSlice;
       analysisStat.sliceEventStart = sliceData->front().eventNumber;
       analysisStat.sliceEventEnd = sliceData->back().eventNumber;
-      analysisStat.sliceDT = sliceData->back().eventUnixTime - sliceData->back().eventUnixTime;
+      analysisStat.sliceUnixTimeStart = sliceData->front().eventUnixTime;
+      analysisStat.sliceUnixTimeEnd = sliceData->back().eventUnixTime;
 
       Info("loop", "Slice %d", iSlice);
+
+      TVectorD meanDU(2);
+      for_each(sliceData->begin(), sliceData->end(), [&meanDU](const TpcCalibData d) {
+        meanDU += 1.0 / N_SLICE_ENTRIES * (d.u() - d.uPrim());
+      });
 
       SliceDiscrepancyFCT fct(sliceData);
 
@@ -291,8 +284,8 @@ int main(int argc, char **argv) {
       min.SetVariable(1, "A1", 0, 0.01);
       min.SetVariable(2, "A2", 0, 0.01);
       min.SetVariable(3, "A3", 1, 0.01);
-      min.SetVariable(4, "U0X", 0, 0.001);
-      min.SetVariable(5, "U0Y", 0, 0.001);
+      min.SetVariable(4, "U0X", hU0X.GetEntries() > 20 ? 0.5 * (hU0X.GetMean() + meanDU[0]) : meanDU[0], 1e-4);
+      min.SetVariable(5, "U0Y", hU0Y.GetEntries() > 20 ? 0.5 * (hU0Y.GetMean() + meanDU[1]) : meanDU[1], 1e-4);
 
       if (true == (analysisStat.isMinimizationSuccessful = min.Minimize())) {
         Info("min", "Minimization successful");
@@ -309,8 +302,11 @@ int main(int argc, char **argv) {
         analysisStat.Aopt = Aopt;
         analysisStat.u0opt = u0opt;
 
+        hU0X.Fill(u0opt[0]);
+        hU0Y.Fill(u0opt[1]);
+
         TDecompSVD svd(Aopt);
-        if (true == (analysisStat.isSVDSuccesful = svd.Decompose())) {
+        if (true == (analysisStat.isSVDSuccessful = svd.Decompose())) {
           Info("decomp", "Decomposition successful");
           auto u = svd.GetU();
           auto v = svd.GetV();
@@ -319,11 +315,16 @@ int main(int argc, char **argv) {
           double phi_v = ASin(v[0][1]);
           Info("decomp", "dPhi = %f", phi_u - phi_v);
 
-          analysisStat.u = u;
-          analysisStat.v = v;
+          analysisStat.svdU = u;
+          analysisStat.svdV = v;
           analysisStat.signal = sig;
           analysisStat.svdPhiU = phi_u;
           analysisStat.svdPhiV = phi_v;
+
+          analysisStat.oldC = sliceData->back().C();
+          analysisStat.newC = Aopt * analysisStat.oldC + u0opt;
+
+          analysisResultTreePtr->Fill();
         }
 
         TH2D hdYvsY_before_slice("hdYvsY_before_slice", ";Y (cm);dY (cm)", 200, -100, 100, 1000, -1., 1.);
@@ -347,23 +348,27 @@ int main(int argc, char **argv) {
           hdXvsX_after.Fill(data.uPrim()[0], (Aopt * data.u() + u0opt - data.uPrim())[0]);
         }
 
-        if (iSlice % sliceStep == 0) {
+//        if (true) {
+        if (sliceStep == 0 || iSlice % sliceStep == 0) {
           c->Clear();
 
           auto slideContent = unique_ptr<TPaveText>(GenerateSliceInfo(analysisStat));
           slideContent->Draw();
-          c->Print("test.pdf", "pdf");
+          writePDF();
           c->Clear();
 
           c->Divide(2, 2);
           c->cd(1);
+          gPad->SetGridy();
+          hdYvsY_before_slice.SetMarkerColor(kBlue);
           hdYvsY_after_slice.SetMarkerColor(kRed);
           hdYvsY_after_slice.SetLineColor(kRed);
           hdYvsY_before_slice.Draw();
           hdYvsY_after_slice.Draw("same");
 
           c->cd(2);
-
+          gPad->SetGridy();
+          hdYvsX_before_slice.SetMarkerColor(kBlue);
           hdYvsX_after_slice.SetMarkerColor(kRed);
           hdYvsX_after_slice.SetLineColor(kRed);
           hdYvsX_before_slice.Draw();
@@ -378,12 +383,7 @@ int main(int argc, char **argv) {
 
           c->cd(4);
 
-          auto hdX_before = unique_ptr<TH1>(hdYvsY_before_slice.ProjectionY("hdX_before"));
-          hdX_before->Draw();
-          auto hdX_after = unique_ptr<TH1>(hdYvsY_after_slice.ProjectionY("hdX_after"));
-          hdX_after->Draw("same");
-
-          c->Print("test.pdf", "pdf");
+          writePDF();
         }
       }
 
@@ -400,30 +400,54 @@ int main(int argc, char **argv) {
   c->Divide(2, 2);
 
   c->cd(1);
+  gPad->SetGridy();
   hdYvsY_before.Draw("colz");
   c->cd(2);
+  gPad->SetGridy();
   hdYvsY_after.Draw("colz");
   c->cd(3);
+  gPad->SetGridy();
   hdYvsX_before.Draw("colz");
   c->cd(4);
+  gPad->SetGridy();
   hdYvsX_after.Draw("colz");
-  c->Print("test.pdf", "pdf");
+  writePDF();
 
   c->Clear();
   c->Divide(2, 2);
 
   c->cd(1);
+  gPad->SetGridy();
   hdXvsY_before.Draw("colz");
   c->cd(2);
+  gPad->SetGridy();
   hdXvsY_after.Draw("colz");
   c->cd(3);
+  gPad->SetGridy();
   hdXvsX_before.Draw("colz");
   c->cd(4);
+  gPad->SetGridy();
   hdXvsX_after.Draw("colz");
-  c->Print("test.pdf", "pdf");
+  writePDF();
 
   c->Clear();
-  c->Print("test.pdf)", "pdf");
+  c->Divide(1, 2);
+
+  c->cd(1);
+  gPad->SetLogy();
+  hU0X.Draw();
+  c->cd(2);
+  gPad->SetLogy();
+  hU0Y.Draw();
+
+  writePDF();
+
+  c->Clear();
+  writePDF(2);
+
+  outputRootFilePtr->cd();
+  analysisResultTreePtr->Write();
+  outputRootFilePtr->Close();
 
   return 0;
 }

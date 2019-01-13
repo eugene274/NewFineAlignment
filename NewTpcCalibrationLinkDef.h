@@ -1,0 +1,14 @@
+//
+// Created by eugene on 1/13/19.
+//
+
+#ifndef NEWTPCCALIBRATION_NEWTPCCALIBRATIONLINKDEF_H
+#define NEWTPCCALIBRATION_NEWTPCCALIBRATIONLINKDEF_H
+
+#ifdef __MAKECINT__
+
+#pragma link C++ class SliceAnalysisData+;
+
+#endif
+
+#endif //NEWTPCCALIBRATION_NEWTPCCALIBRATIONLINKDEF_H
