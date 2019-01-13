@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
 
   Info(MODULE_NAME, "Input file: %s", input_file.c_str());
 
-  auto chainPtr = make_unique<TChain>(tree_name.c_str());
+  auto chainPtr = unique_ptr<TChain>(new TChain(tree_name.c_str()));
   chainPtr->Add(input_file.c_str());
   chainPtr->ls();
 
@@ -237,7 +237,7 @@ int main(int argc, char **argv) {
   /*
    * Initialize output PDF
    */
-  auto c = std::make_unique<TCanvas>("c1", "");
+  auto c = unique_ptr<TCanvas>(new TCanvas("c1", ""));
   gStyle->SetOptStat(111111);
   auto writePDF = [tree_name, &c](int option = 0) {
     const char *name = Form("alignment_%s.pdf", tree_name.c_str());
@@ -250,11 +250,11 @@ int main(int argc, char **argv) {
     c->Print(name, "pdf");
   };
 
-  auto sliceLabel = make_unique<TText>();
+  auto sliceLabel = unique_ptr<TText>(new TText);
   sliceLabel->SetNDC();
   writePDF(1);
 
-  auto outputRootFilePtr = make_unique<TFile>(Form("alignment_%s.root", tree_name.c_str()), "recreate");
+  auto outputRootFilePtr = unique_ptr<TFile>(TFile::Open(Form("alignment_%s.root", tree_name.c_str()), "recreate"));
   auto analysisResultTreePtr = new TTree(tree_name.c_str(), "");
   SliceAnalysisData analysisStat;
   InitOutputTree(*analysisResultTreePtr, analysisStat);
