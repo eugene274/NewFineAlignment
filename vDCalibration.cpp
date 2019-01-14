@@ -8,14 +8,16 @@
 #include <TNtupleD.h>
 #include <TError.h>
 #include <TCanvas.h>
+#include <fstream>
 
 int main(int argc, char **argv) {
   using namespace std;
+  using namespace TMath;
 
   string tpc_name = "VTPC1";
   string tree_name = "VTPC1vsVTPC2";
   string input_root = "alignment_" + tree_name + ".root";
-  string input_txt = "../input/VTPC1.txt";
+  string input_txt = argv[1];
 
   TNtupleD recVDriftTree("recVDriftTree", "", "time:vD");
   recVDriftTree.ReadFile(input_txt.c_str());
@@ -48,6 +50,7 @@ int main(int argc, char **argv) {
   calibrationTimeEnd = sliceUnixTimeEnd;
   Info("vDCalibration", "Interval [%u : %u] s", calibrationTimeStart, calibrationTimeEnd);
 
+  ofstream txtOutput(tpc_name + "_new.txt");
   for (long ie = 0; ie < analysisChain.GetEntriesFast(); ++ie) {
     analysisChain.GetEntry(ie);
     double calibTime = (sliceUnixTimeEnd + sliceUnixTimeStart) / 2.0;
@@ -58,10 +61,13 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    double calibratedVDrift = sliceRecVDrift * (1. / (1 - dYYSlope));
-    double calibratedVDriftError = calibratedVDrift * dYYSlopeError / sliceRecVDrift;
+    sliceRecVDrift *= 1e3;
+    double calibratedVDrift = sliceRecVDrift * (1. / (1 + dYYSlope));
+    double calibratedVDriftError = Abs(calibratedVDrift * dYYSlopeError / sliceRecVDrift);
     Info("vDCalibration", "T = %f vD = %f eps = +- %f ", calibTime, calibratedVDrift, calibratedVDriftError);
     calibratedVDriftTree.Fill(calibTime, calibratedVDrift);
+
+    txtOutput << (int) calibTime << " " << calibratedVDrift << endl;
   }
 
   auto c = new TCanvas;
