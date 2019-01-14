@@ -9,6 +9,7 @@
 #include <TError.h>
 #include <TCanvas.h>
 #include <fstream>
+#include <iomanip>
 
 int main(int argc, char **argv) {
   using namespace std;
@@ -67,7 +68,7 @@ int main(int argc, char **argv) {
     Info("vDCalibration", "T = %f vD = %f eps = +- %f ", calibTime, calibratedVDrift, calibratedVDriftError);
     calibratedVDriftTree.Fill(calibTime, calibratedVDrift);
 
-    txtOutput << (int) calibTime << " " << calibratedVDrift << endl;
+    txtOutput << (int) calibTime << " " << setprecision(9) << calibratedVDrift << endl;
   }
 
   auto c = new TCanvas;
