@@ -11,3 +11,6 @@ include(${ROOT_USE_FILE})
 
 add_executable(NewTpcCalibration main.cpp)
 target_link_libraries(NewTpcCalibration PUBLIC ${ROOT_LIBRARIES} ROOT::MathMore)
+
+add_executable(vDCalibration vDCalibration.cpp)
+target_link_libraries(vDCalibration PUBLIC ${ROOT_LIBRARIES} ROOT::MathMore)

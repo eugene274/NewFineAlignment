@@ -23,9 +23,11 @@
 #include <TDecompSVD.h>
 #include <TPaveText.h>
 #include <TH2D.h>
+#include <TProfile.h>
 #include <TChain.h>
+#include <TF1.h>
 
-constexpr int N_SLICE_ENTRIES = 5000;
+constexpr int N_SLICE_ENTRIES = 2000;
 constexpr int N_SLICES_PRINT = 10;
 
 TpcCalibData gTpcCalibData;
@@ -200,6 +202,12 @@ void InitOutputTree(TTree &tree, SliceAnalysisData &data) {
   tree.Branch("slaveChamberDPhi", &data.slaveChamberDPhi);
   tree.Branch("slaveChamberDX", &data.slaveChamberDU[0]);
   tree.Branch("slaveChamberDY", &data.slaveChamberDU[1]);
+
+  tree.Branch("sliceRecVDriftStart", &data.sliceRecVDriftStart);
+  tree.Branch("sliceRecVDrift", &data.sliceRecVDrift);
+  tree.Branch("sliceRecVDriftEnd", &data.sliceRecVDriftEnd);
+  tree.Branch("dYYSlope", &data.dYYSlope);
+  tree.Branch("dYYSlopeError", &data.dYYSlopeError);
 }
 
 int main(int argc, char **argv) {
@@ -337,32 +345,9 @@ int main(int argc, char **argv) {
         analysisStat.slaveChamberDU = analysisStat.slaveChamberNewCenter - analysisStat.slaveChamberOldCenter;
         analysisStat.slaveChamberDPhi = RadToDeg() * dPhi;
 
-        analysisResultTreePtr->Fill();
 
         hU0X.Fill(u0opt[0]);
         hU0Y.Fill(u0opt[1]);
-        /*
-        TDecompSVD svd(optimalA);
-        if (true == (analysisStat.svdIsSuccessful = svd.Decompose())) {
-          Info("SVD", "Decomposition successful");
-          auto u = svd.GetU();
-          auto v = svd.GetV();
-          auto sig = svd.GetSig();
-          double phi_u = ASin(u[0][1]);
-          double phi_v = ASin(v[0][1]);
-
-
-          analysisStat.svdU = u;
-          analysisStat.svdV = v;
-          analysisStat.svdSig = sig;
-          analysisStat.svdPhiU = phi_u;
-          analysisStat.svdPhiV = phi_v;
-
-
-
-          optimalA = u * v.T();
-        }
-        */
 
         TH2D hdYvsY_before_slice
             ("hdYvsY_before_slice", ";Y_{master} (cm);Y_{slave} - Y_{master} (cm)", 200, -100, 100, 1000, -1., 1.);
@@ -389,7 +374,24 @@ int main(int argc, char **argv) {
           hdXvsX_after.Fill(data.uPrim()[0], (optimalA * data.u() + u0opt - data.uPrim())[0]);
         }
 
-//        if (true) {
+        auto hdY_before = unique_ptr<TH1>(hdYvsY_before_slice.ProjectionY("hdY_before"));
+        auto hdY_after = unique_ptr<TH1>(hdYvsY_after_slice.ProjectionY("hdY_after"));
+        auto pdYvsY_before_slice = unique_ptr<TProfile>(hdYvsY_before_slice.ProfileX("pdYvsY_before_slice"));
+        auto pdYvsY_after_slice = unique_ptr<TProfile>(hdYvsY_after_slice.ProfileX("pdYvsY_after_slice"));
+
+        pdYvsY_before_slice->Fit("pol1", "Q", "", -25, 25);
+        TF1* fitFun = pdYvsY_before_slice->GetFunction("pol1");
+        double dYYSlope = fitFun->GetParameter(1);
+        double dYYSlopeError = fitFun->GetParError(1);
+        analysisStat.sliceRecVDriftStart = sliceData->front().slave_recVDrift;
+        analysisStat.sliceRecVDriftEnd = sliceData->back().slave_recVDrift;
+        analysisStat.sliceRecVDrift = (*(sliceData->begin() + N_SLICE_ENTRIES/2)).slave_recVDrift;
+        analysisStat.dYYSlope = dYYSlope;
+        analysisStat.dYYSlopeError = dYYSlopeError;
+        analysisResultTreePtr->Fill();
+
+
+
         if (sliceStep == 0 || iSlice % sliceStep == 0) {
           c->Clear();
 
@@ -416,13 +418,14 @@ int main(int argc, char **argv) {
           hdYvsX_after_slice.Draw("same");
 
           c->cd(3);
-
-          auto hdY_before = unique_ptr<TH1>(hdYvsY_before_slice.ProjectionY("hdY_before"));
           hdY_before->Draw();
-          auto hdY_after = unique_ptr<TH1>(hdYvsY_after_slice.ProjectionY("hdY_after"));
+          hdY_after->SetLineColor(kRed);
           hdY_after->Draw("same");
 
           c->cd(4);
+          pdYvsY_before_slice->Draw();
+//          pdYvsY_after_slice->SetLineColor(kRed);
+//          pdYvsY_after_slice->Draw("same");
 
           writePDF();
         }

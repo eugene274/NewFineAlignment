@@ -67,6 +67,13 @@ class SliceAnalysisData {
   double slaveChamberDPhi;
   TVectorD slaveChamberDU{TVectorD(2)};
 
+
+  double sliceRecVDriftStart{0};
+  double sliceRecVDrift{0};
+  double sliceRecVDriftEnd{0};
+  double dYYSlope{0};
+  double dYYSlopeError{0};
+
 };
 
 #endif //NEWTPCCALIBRATION_TYPES_H
