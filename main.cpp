@@ -301,7 +301,9 @@ int main(int argc, char **argv) {
 
       TVectorD meanDU(2);
       for_each(sliceData->begin(), sliceData->end(), [&meanDU](const TpcCalibData d) {
-        meanDU += 1.0 / N_SLICE_ENTRIES * (d.u() - d.uPrim());
+        if ((d.u() - d.uPrim()).Norm1() <= 1) {
+          meanDU += 1.0 / N_SLICE_ENTRIES * (d.u() - d.uPrim());
+        }
       });
       analysisStat.sliceMeanDU = meanDU;
 
@@ -423,11 +425,13 @@ int main(int argc, char **argv) {
           hdY_after->Draw("same");
 
           c->cd(4);
+          gStyle->SetOptFit(1);
           pdYvsY_before_slice->Draw();
 //          pdYvsY_after_slice->SetLineColor(kRed);
 //          pdYvsY_after_slice->Draw("same");
 
           writePDF();
+          gStyle->SetOptFit(0);
         }
       }
 
